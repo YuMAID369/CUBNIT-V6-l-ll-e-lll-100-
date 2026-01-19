@@ -1,0 +1,359 @@
+--====================================
+-- CUBNIT - BROOKHAVEN (V5 CONSOLIDADA + ALMA DE CÓPIA)
+--====================================
+
+local CoreGui = game:GetService("CoreGui")
+if CoreGui:FindFirstChild("PlayerViewMini") then
+    CoreGui:FindFirstChild("PlayerViewMini"):Destroy()
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+
+--====================================
+-- REMOTES E FUNÇÕES DA "ALMA"
+--====================================
+local function GetRemote(name)
+    return ReplicatedStorage:FindFirstChild(name, true)
+end
+
+local Remotes = {
+    Wear = GetRemote("Wear"),
+    ChangeCharacterBody = GetRemote("ChangeCharacterBody"),
+    ChangeBodyColor = GetRemote("ChangeBodyColor")
+}
+
+local function GetFaceId(character)
+    local head = character:FindFirstChild("Head")
+    if head and head:FindFirstChild("face") then
+        return head.face.Texture:match("%d+")
+    end
+    return nil
+end
+
+--====================================
+-- ESTADOS GLOBAIS
+--====================================
+local antiSitEnabled = false
+local antiSitLoop = nil
+local Slots = {}
+local selectedPlayerForSkin = nil
+
+local function setSeatsEnabled(enabled)
+    for _, seat in pairs(workspace:GetDescendants()) do
+        if seat:IsA("Seat") or seat:IsA("VehicleSeat") then
+            pcall(function() seat.Disabled = not enabled end)
+        end
+    end
+end
+
+local function startPreventLoop(hum)
+    if antiSitLoop then antiSitLoop:Disconnect() end
+    antiSitLoop = hum.StateChanged:Connect(function(_, newState)
+        if antiSitEnabled and newState == Enum.HumanoidStateType.Seated then
+            pcall(function()
+                hum.Sit = false
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+    end)
+end
+
+--====================================
+-- UI ROOT
+--====================================
+local Gui = Instance.new("ScreenGui", CoreGui)
+Gui.Name = "PlayerViewMini"
+Gui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame", Gui)
+MainFrame.Size = UDim2.new(0, 280, 0, 210)
+MainFrame.Position = UDim2.new(0.03, 0, 0.4, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true 
+MainFrame.ClipsDescendants = true
+local UIStroke = Instance.new("UIStroke", MainFrame)
+UIStroke.Color = Color3.fromRGB(0, 180, 255)
+UIStroke.Thickness = 1.8
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+local ScriptTitle = Instance.new("TextLabel", MainFrame)
+ScriptTitle.Size = UDim2.new(0, 100, 0, 30)
+ScriptTitle.Position = UDim2.new(0, 12, 0, 3)
+ScriptTitle.BackgroundTransparency = 1
+ScriptTitle.Text = "CUBNIT"
+ScriptTitle.TextColor3 = Color3.fromRGB(120, 120, 120)
+ScriptTitle.Font = Enum.Font.GothamBold
+ScriptTitle.TextSize = 11
+ScriptTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local PlaylistFrame = Instance.new("ScrollingFrame", Gui)
+PlaylistFrame.Size = UDim2.new(0, 180, 0, 210)
+PlaylistFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+PlaylistFrame.BorderSizePixel = 0
+PlaylistFrame.Visible = false
+PlaylistFrame.ScrollBarThickness = 2
+Instance.new("UICorner", PlaylistFrame)
+local ListLayout = Instance.new("UIListLayout", PlaylistFrame)
+ListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+RunService.RenderStepped:Connect(function()
+    PlaylistFrame.Position = MainFrame.Position + UDim2.new(0, 285, 0, 0)
+end)
+
+local Minimized = false
+local MinBtn = Instance.new("TextButton", MainFrame)
+MinBtn.Size = UDim2.new(0, 30, 0, 30)
+MinBtn.Position = UDim2.new(1, -35, 0, 2)
+MinBtn.BackgroundTransparency = 1
+MinBtn.Text = "-"
+MinBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 20
+
+MinBtn.MouseButton1Click:Connect(function()
+    Minimized = not Minimized
+    MainFrame:TweenSize(Minimized and UDim2.new(0, 280, 0, 35) or UDim2.new(0, 280, 0, 210), "Out", "Quad", 0.3, true)
+    MinBtn.Text = Minimized and "+" or "-"
+    if Minimized then PlaylistFrame.Visible = false end
+end)
+
+--====================================
+-- SISTEMA DE ABAS
+--====================================
+local PageI = Instance.new("Frame", MainFrame)
+PageI.Size = UDim2.new(1, 0, 1, -40); PageI.Position = UDim2.new(0, 0, 0, 40); PageI.BackgroundTransparency = 1
+
+local PageII = Instance.new("Frame", MainFrame)
+PageII.Size = UDim2.new(1, 0, 1, -40); PageII.Position = UDim2.new(0, 0, 0, 40); PageII.BackgroundTransparency = 1; PageII.Visible = false
+
+local PageIII = Instance.new("Frame", MainFrame)
+PageIII.Size = UDim2.new(1, 0, 1, -40); PageIII.Position = UDim2.new(0, 0, 0, 40); PageIII.BackgroundTransparency = 1; PageIII.Visible = false
+
+local TabContainer = Instance.new("Frame", MainFrame)
+TabContainer.Size = UDim2.new(0, 120, 0, 30); TabContainer.Position = UDim2.new(0.5, -60, 0, 5); TabContainer.BackgroundTransparency = 1
+
+local function CreateTabBtn(text, pos, targetPage)
+    local btn = Instance.new("TextButton", TabContainer)
+    btn.Size = UDim2.new(0, 35, 0, 25); btn.Position = pos; btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.Text = text; btn.TextColor3 = Color3.fromRGB(255, 255, 255); btn.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    btn.MouseButton1Click:Connect(function()
+        PageI.Visible = (targetPage == PageI)
+        PageII.Visible = (targetPage == PageII)
+        PageIII.Visible = (targetPage == PageIII)
+        BtnI.BackgroundColor3 = (targetPage == PageI) and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(40, 40, 40)
+        BtnII.BackgroundColor3 = (targetPage == PageII) and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(40, 40, 40)
+        BtnIII.BackgroundColor3 = (targetPage == PageIII) and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(40, 40, 40)
+    end)
+    return btn
+end
+
+BtnI = CreateTabBtn("I", UDim2.new(0, 0, 0, 0), PageI)
+BtnII = CreateTabBtn("II", UDim2.new(0, 40, 0, 0), PageII)
+BtnIII = CreateTabBtn("III", UDim2.new(0, 80, 0, 0), PageIII)
+BtnI.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+
+-- Aba I e II permanecem iguais (Omitidas aqui para brevidade, mas mantidas no seu código original)
+-- [Aba I Lógica...]
+local function CreateSlot(y)
+    local Slot = {Target = nil, Viewing = false, Connection = nil}
+    local Container = Instance.new("Frame", PageI)
+    Container.Size = UDim2.new(1, -20, 0, 45); Container.Position = UDim2.new(0, 10, 0, y); Container.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    Instance.new("UICorner", Container).CornerRadius = UDim.new(0, 5)
+    local Av = Instance.new("ImageButton", Container)
+    Av.Size = UDim2.new(0, 35, 0, 35); Av.Position = UDim2.new(0, 5, 0, 5); Av.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    Av.Image = "rbxassetid://15132711124"
+    Instance.new("UICorner", Av).CornerRadius = UDim.new(1, 0)
+    local AvStroke = Instance.new("UIStroke", Av); AvStroke.Color = Color3.fromRGB(60, 60, 60); AvStroke.Thickness = 2
+    local Txt = Instance.new("TextBox", Container)
+    Txt.Size = UDim2.new(1, -60, 0, 30); Txt.Position = UDim2.new(0, 50, 0, 7); Txt.BackgroundTransparency = 1
+    Txt.Text = ""; Txt.PlaceholderText = "Nome ou Prefixo..."; Txt.TextColor3 = Color3.fromRGB(200, 200, 200)
+    Txt.Font = Enum.Font.Gotham; Txt.TextSize = 14
+    Slot.UpdateTarget = function(plr)
+        if not plr then return end
+        Slot.Target = plr; Txt.Text = plr.DisplayName; Txt.TextColor3 = Color3.fromRGB(0, 255, 150)
+        Av.Image = Players:GetUserThumbnailAsync(plr.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+    end
+    Av.MouseButton1Click:Connect(function()
+        if not Slot.Target then return end
+        Slot.Viewing = not Slot.Viewing
+        if Slot.Viewing then
+            AvStroke.Color = Color3.fromRGB(0, 255, 150)
+            Slot.Connection = RunService.RenderStepped:Connect(function()
+                if Slot.Target and Slot.Target.Character then
+                    local hum = Slot.Target.Character:FindFirstChildOfClass("Humanoid")
+                    if hum then Camera.CameraSubject = hum end
+                end
+            end)
+        else
+            if Slot.Connection then Slot.Connection:Disconnect() end
+            AvStroke.Color = Color3.fromRGB(60, 60, 60)
+            Camera.CameraSubject = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        end
+    end)
+    Txt.FocusLost:Connect(function()
+        local n = Txt.Text:lower()
+        for _, v in pairs(Players:GetPlayers()) do
+            if v.Name:lower():sub(1, #n) == n or v.DisplayName:lower():sub(1, #n) == n then Slot.UpdateTarget(v); break end
+        end
+    end)
+    table.insert(Slots, Slot)
+end
+CreateSlot(0); CreateSlot(50); CreateSlot(100)
+
+-- [Aba II Lógica...]
+local function CreateGridBtn(text, pos, size, callback)
+    local btn = Instance.new("TextButton", PageII)
+    btn.Size = size; btn.Position = pos; btn.BackgroundColor3 = Color3.fromRGB(0, 80, 100)
+    btn.Text = text; btn.TextColor3 = Color3.fromRGB(0, 0, 0); btn.Font = Enum.Font.GothamBold; btn.TextSize = 14
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+CreateGridBtn("Emotes", UDim2.new(0, 10, 0, 10), UDim2.new(0, 120, 0, 35), function() loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-7yd7-I-Emote-Script-48024"))() end)
+CreateGridBtn("ToolTP", UDim2.new(0, 10, 0, 55), UDim2.new(0, 120, 0, 35), function()
+    local tool = Instance.new("Tool", LocalPlayer.Backpack); tool.Name = "ToolTP"; tool.RequiresHandle = false
+    tool.Activated:Connect(function() LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(Mouse.Hit.p + Vector3.new(0,3,0)) end)
+end)
+CreateGridBtn("ClickName", UDim2.new(0, 10, 0, 100), UDim2.new(0, 120, 0, 35), function()
+    local tool = Instance.new("Tool", LocalPlayer.Backpack); tool.Name = "ClickName"; tool.RequiresHandle = false
+    tool.Activated:Connect(function()
+        local t = Mouse.Target
+        if t and t.Parent then
+            local p = Players:GetPlayerFromCharacter(t.Parent) or Players:GetPlayerFromCharacter(t.Parent.Parent)
+            if p then Slots[1].UpdateTarget(p) end
+        end
+    end)
+end)
+CreateGridBtn("ANTI SIT", UDim2.new(0, 140, 0, 10), UDim2.new(0, 130, 0, 35), function()
+    antiSitEnabled = not antiSitEnabled; setSeatsEnabled(not antiSitEnabled)
+    StarterGui:SetCore("SendNotification", {Title = "Anti Sit", Text = antiSitEnabled and "ATIVADO ✅" or "DESATIVADO ❌", Duration = 2})
+end)
+CreateGridBtn("4K", UDim2.new(0, 140, 0, 55), UDim2.new(0, 130, 0, 35), function() loadstring(game:HttpGet("https://rawscripts.net/raw/Brookhaven-RP-BrookHaven-UltraFX-44718"))() end)
+CreateGridBtn("Infinity yield", UDim2.new(0, 140, 0, 100), UDim2.new(0, 130, 0, 35), function() loadstring(game:HttpGet('https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source'))() end)
+
+--====================================
+-- ABA III: PLAYLIST & SKIN (IMPLEMENTANDO A ALMA)
+--====================================
+local function RefreshPlaylist()
+    for _, v in pairs(PlaylistFrame:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local pBtn = Instance.new("TextButton", PlaylistFrame)
+            pBtn.Size = UDim2.new(1, -10, 0, 30); pBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+            pBtn.BorderSizePixel = 0; pBtn.Text = p.DisplayName; pBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+            pBtn.Font = Enum.Font.Gotham; pBtn.TextSize = 12
+            pBtn.TextXAlignment = Enum.TextXAlignment.Center
+            Instance.new("UICorner", pBtn).CornerRadius = UDim.new(0, 4)
+            pBtn.MouseButton1Click:Connect(function()
+                selectedPlayerForSkin = p
+                for _, b in pairs(PlaylistFrame:GetChildren()) do if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(25, 25, 25) end end
+                pBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+            end)
+        end
+    end
+    PlaylistFrame.CanvasSize = UDim2.new(0,0,0, ListLayout.AbsoluteContentSize.Y + 10)
+end
+
+-- A ALMA DE COPIAR INTEGRADA NO BOTÃO
+local function ExecutarCopia(statusBtn)
+    local TPlayer = selectedPlayerForSkin
+    if not TPlayer or not TPlayer.Character then 
+        statusBtn.Text = "SELECIONE ALVO!"
+        task.wait(1.5)
+        statusBtn.Text = "Copy Skin"
+        return 
+    end
+    
+    local TChar = TPlayer.Character
+    local LChar = LocalPlayer.Character
+    local THum = TChar:FindFirstChildOfClass("Humanoid")
+    local LHum = LChar:FindFirstChildOfClass("Humanoid")
+    
+    if THum and LHum and Remotes.Wear then
+        statusBtn.Text = "LENDO SKIN..."
+        local successT, PDesc = pcall(function() return THum:GetAppliedDescription() end)
+        local successL, LDesc = pcall(function() return LHum:GetAppliedDescription() end)
+        
+        local function SafeWear(id)
+            if id and tonumber(id) and tonumber(id) ~= 0 then
+                Remotes.Wear:InvokeServer(tonumber(id))
+                task.wait(0.3) 
+            end
+        end
+
+        statusBtn.Text = "LIMPANDO ATUAL..."
+        if successL then
+            for _, acc in ipairs(LDesc:GetAccessories(true)) do
+                if acc.AssetId then
+                    Remotes.Wear:InvokeServer(tonumber(acc.AssetId))
+                    task.wait(0.15)
+                end
+            end
+        end
+        Remotes.Wear:InvokeServer(0) 
+        Remotes.ChangeCharacterBody:InvokeServer({[1]=0,[2]=0,[3]=0,[4]=0,[5]=0,[6]=0})
+        task.wait(0.4)
+
+        statusBtn.Text = "MORFANDO CORPO..."
+        if successT then
+            local argsBody = {[1] = {PDesc.Torso, PDesc.RightArm, PDesc.LeftArm, PDesc.RightLeg, PDesc.LeftLeg, PDesc.Head}}
+            Remotes.ChangeCharacterBody:InvokeServer(unpack(argsBody))
+        end
+        
+        local SkinColor = TChar:FindFirstChildOfClass("BodyColors")
+        if SkinColor then Remotes.ChangeBodyColor:FireServer(tostring(SkinColor.HeadColor)) end
+        task.wait(0.3)
+
+        statusBtn.Text = "VESTINDO TUDO..."
+        local faceId = GetFaceId(TChar)
+        if faceId then SafeWear(faceId) elseif successT and PDesc.Face ~= 0 then SafeWear(PDesc.Face) end
+        
+        if successT then
+            SafeWear(PDesc.Shirt)
+            SafeWear(PDesc.Pants)
+            for _, acc in ipairs(PDesc:GetAccessories(true)) do SafeWear(acc.AssetId) end
+            
+            statusBtn.Text = "ANIMAÇÕES..."
+            local anims = {PDesc.IdleAnimation, PDesc.WalkAnimation, PDesc.RunAnimation, PDesc.JumpAnimation}
+            for _, a in ipairs(anims) do SafeWear(a) end
+        end
+
+        statusBtn.Text = "CÓPIA 100%!"
+        task.wait(2)
+        statusBtn.Text = "Copy Skin"
+    end
+end
+
+local function CreateBigBlueBtn(text, y, callback)
+    local btn = Instance.new("TextButton", PageIII)
+    btn.Size = UDim2.new(1, -20, 0, 42); btn.Position = UDim2.new(0, 10, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(0, 100, 255); btn.Text = text; btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 16; btn.TextColor3 = Color3.fromRGB(0,0,0)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.MouseButton1Click:Connect(function() callback(btn) end)
+end
+
+CreateBigBlueBtn("Playlist :", 5, function() 
+    PlaylistFrame.Visible = not PlaylistFrame.Visible 
+    if PlaylistFrame.Visible then RefreshPlaylist() end
+end)
+CreateBigBlueBtn("Atualizar Lista :", 55, RefreshPlaylist)
+CreateBigBlueBtn("Copy Skin", 105, function(selfBtn)
+    task.spawn(function() ExecutarCopia(selfBtn) end)
+end)
+
+--====================================
+-- INICIALIZAÇÃO
+--====================================
+LocalPlayer.CharacterAdded:Connect(function(char) startPreventLoop(char:WaitForChild("Humanoid")) end)
+if LocalPlayer.Character then startPreventLoop(LocalPlayer.Character:WaitForChild("Humanoid")) end
